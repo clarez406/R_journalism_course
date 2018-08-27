@@ -1,0 +1,169 @@
+---
+title: "R for Journalism Markdown Page"
+output: html_document
+author: Zak Clare-Salzler
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown page for a couple of projects from the R for Journalism MOOC offered through the Knight Center for Journalism in the Americas.
+
+The first set of analyses and visualization shows bike use data over time for the Bay Area Bike Share program. 
+
+The second set of analyses and visualizations show a choropleth map that graphically displays the difference in the percentage of murder cases between non-white victims and white victims that are open and closed by state. 
+
+## Bay Area Bike Share data
+
+### Load Libraries
+
+```{r bikes libs, warning = F, message = F}
+library(ggplot2)
+library(tidyverse)
+library(lubridate)
+```
+
+
+### The Analysis
+This analysis will read in Bay Area bike share data and plot the median usage time for each day of the year between June 28, 2017 and December 31, 2017 for subscribers and non-subscribers or customers. A trend line with variance is plotted with the daily data. 
+
+```{r bikes analysis, warning = F}
+df <- read.csv('https://s3.amazonaws.com/fordgobike-data/2017-fordgobike-tripdata.csv', stringsAsFactors = F)
+
+df <- df %>% 
+  mutate(duration_min = duration_sec/60)
+
+df$start_time <- as.Date(strptime(df$start_time, format = '%Y-%m-%d'))
+df$end_time <- as.Date(strptime(df$end_time, format = '%Y-%m-%d'))
+
+df_plot <- df %>% 
+  group_by(user_type, start_time) %>% 
+  summarize(Time = median(duration_min)) %>% 
+  mutate(Month = month(start_time, label = T))
+```
+
+
+### The Plot
+
+```{r bike plot, warning = F, message = F, echo=FALSE}
+ggplot(data = df_plot, aes(x = start_time, y = Time, color = user_type)) +
+  geom_smooth(size = 0.5) +
+  geom_path(size = 1) +
+  scale_x_date(date_breaks = '1 month', date_labels = '%b') +
+  labs(x = 'Usage Start Date', 
+       y = 'Usage Time',
+       color = 'User Type') +
+  theme_minimal() +
+  ggtitle('2017 Bay Area Bike Share Usage by User Type') +
+  scale_color_manual(values = c('#31A9B8', '#F9A603')) +
+  theme(legend.title = element_text(hjust = 0.5, size = 12),
+        legend.text = element_text(size = 10),
+        plot.title = element_text(hjust = 0.5, size = 14))
+```
+
+
+## Open and Closed Murder data
+
+### Load Libraries
+
+```{r states libs, warning = F, message = F}
+library(readr)
+library(tidyverse)
+library(sf)
+library(ggplot2)
+library(ggpubr)
+library(viridis)
+library(DT)
+```
+
+
+### The Analysis
+This analysis will read in murder case data from 28 states and calculate the difference in the percentage of victims who are non-white and who are white in open and closed cases. 
+
+A choropleth map is generated with these data and states are colored dark to bright based on the percent difference calculated for open and closed cases. 
+
+```{r states analysis, warning = F}
+# -- load in homicide data and tidy up data frame
+df <- read_csv('https://raw.githubusercontent.com/washingtonpost/data-homicides/master/homicide-data.csv')
+df <- as_tibble(transform(df, reported_date = as.Date(as.character(df$reported_date), format = '%Y%m%d')))
+df$victim_age <- as.integer(df$victim_age)
+
+# -- wrangle data to get relative percentage of unsolved murders by state and victim race
+df_state_open <- df %>% 
+  filter(disposition == 'Open/No arrest' & victim_race != 'Unknown') %>%
+  mutate(victim_race = case_when(
+    victim_race == 'White' ~ 'White',
+    victim_race != 'White' ~ 'Non-White')) %>% 
+  group_by(state, victim_race) %>% 
+  summarize(total = n()) %>% 
+  mutate(percent = round(total/sum(total)*100, 2))
+
+# -- wrangle data to get relative percentage of closed murders by state and victim race
+df_state_closed <- df %>% 
+  filter(disposition != 'Open/No arrest' & victim_race != 'Unknown') %>% 
+  mutate(victim_race = case_when(
+    victim_race == 'White' ~ 'White',
+    victim_race != 'White' ~ 'Non-White')) %>% 
+  group_by(state, victim_race) %>% 
+  summarize(total = n()) %>% 
+  mutate(percent = round(total/sum(total)*100, 2))
+
+# -- get difference in percent between black and white victims for open cases
+df_open_diff <- df_state_open %>% 
+  group_by(state) %>%
+  mutate(difference = sum(percent[victim_race == 'Non-White']) - percent[victim_race == 'White']) %>% 
+  select(state, difference) %>% 
+  unique()
+
+# -- get difference in percent between black and white victims for closed cases
+df_closed_diff <- df_state_closed %>% 
+  group_by(state) %>%
+  mutate(difference = percent[victim_race == 'Non-White'] - percent[victim_race == 'White']) %>% 
+  select(state, difference) %>% 
+  unique()
+
+# -- load US map shape file 
+fifty_location <- "C:/R_journalism/learn-chapter-5-master/static_maps/data/cb_2017_us_state_20m/cb_2017_us_state_20m.shp"
+fifty_states <- st_read(fifty_location)
+
+# -- filter out Hawaii, Alaska, and Puerto Rico
+lower_48 <- fifty_states %>% 
+  filter(! NAME %in% c('Hawaii', 'Alaska', 'Puerto Rico'))
+
+
+######## -- something different to use facet wrap
+df_states_open <- left_join(lower_48, df_open_diff, by = c('STUSPS' = 'state'))
+
+df_states_open$disposition <- "Open"
+
+# -- join closed 
+df_states_closed <- left_join(lower_48, df_closed_diff, by = c('STUSPS' = 'state'))
+
+df_states_closed$disposition <- "Closed"
+
+# -- bind by row
+df_states_all <- rbind(df_states_closed,df_states_open)
+```
+
+
+### The Plot
+
+```{r states plot, warning = F, message = F, echo=FALSE}
+ggplot(df_states_all) +
+  geom_sf(aes(fill = difference)) +
+  facet_wrap(~disposition,ncol=1) +
+  labs(title = 'Difference in Percentage of Non-White to White Victims by State',
+       subtitle = 'From 2007 to 2017') +
+  theme_void() +
+  scale_fill_viridis() +
+  theme(plot.title = element_text(hjust = 0.5, size = 16),
+        plot.subtitle = element_text(hjust = 0.5, size = 14),
+        panel.grid.major = element_line(color = 'transparent'),
+        legend.title = element_text(size = 14),
+        legend.text = element_text(size = 14),
+        plot.margin = margin(0, 0, 0, 2, 'cm'))
+```
+
